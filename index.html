@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geodetic Benchmarks Map</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Leaflet MarkerCluster CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+    <style>
+        /* Full-window map with better theming */
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        #map {
+            height: 100%;
+        }
+        /* Loading spinner overlay - full-screen */
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: none;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.8);
+            justify-content: center;
+            align-items: center;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="loading"><div class="spinner"></div></div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet MarkerCluster JS -->
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+    <script>
+        let map;
+        let userMarker;
+        let baseLayers; // For switchable tiles
+        let loadingTimeout; // For fallback hide
+        let benchmarksCluster; // For clustered benchmarks
+
+        // Initialize the map
+        function initMap() {
+            // Default center (Winnipeg as fallback)
+            const defaultCenter = [49.8951, -97.1384];
+            map = L.map('map', {
+                fullscreenControl: false, // No fullscreen button
+                attributionControl: true
+            }).setView(defaultCenter, 11); // Default zoom 11
+
+            // Define switchable base layers
+            baseLayers = {
+                'Street Map': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                    maxZoom: 19
+                }),
+                'Satellite': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+                    maxZoom: 18
+                }),
+                'Terrain': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+                    attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
+                    maxZoom: 17
+                })
+            };
+
+            // Add default layer and layers control
+            baseLayers['Street Map'].addTo(map);
+            L.control.layers(baseLayers).addTo(map);
+
+            // Add scale control
+            L.control.scale({ imperial: false }).addTo(map); // Metric scale
+
+            // Initialize cluster group for benchmarks
+            benchmarksCluster = L.markerClusterGroup();
+            map.addLayer(benchmarksCluster);
+
+            // Load benchmarks from JSON
+            loadBenchmarks();
+
+            // Request user's location with loading
+            showLoading(true);
+            getUserLocation();
+        }
+
+        // Function to load benchmarks from JSON file
+        async function loadBenchmarks() {
+            try {
+                const response = await fetch('benchmarks.json'); // Replace with your actual JSON filename if different
+                const data = await response.json();
+
+                data.forEach(benchmark => {
+			console.log(benchmark.id);
+                    const pos = [benchmark.lat, benchmark.lng];
+                    const elev = benchmark.elev || ''; // Handle missing elev
+                    const isBlankElev = !elev.trim(); // Check if blank/empty
+
+                    // Choose color: black for blank elev, red for others
+                    const dotColor = isBlankElev ? '#000000' : '#ff0000';
+
+                    const marker = L.circleMarker(pos, {
+                        title: benchmark.id,
+                        alt: 'Benchmark marker',
+                        radius: 6, // Slightly smaller than user dot for distinction
+                        fillColor: dotColor,
+                        color: dotColor,
+                        fillOpacity: 1,
+                        weight: 1 // Thin border
+                    });
+
+                    // Bind popup with id, elevation, description
+                    marker.bindPopup(`
+                        <b>ID:</b> ${benchmark.id}<br>
+                        <b>Elevation:</b> ${elev || 'N/A'}<br>
+                        <b>Description:</b> ${benchmark.desc || 'No description'}
+                    `);
+
+                    // Add to cluster group
+                    benchmarksCluster.addLayer(marker);
+                });
+            } catch (error) {
+                console.error('Error loading benchmarks:', error);
+                alert('Failed to load benchmarks data. Check console for details.');
+            }
+        }
+
+        // Function to get and display user's location
+        function getUserLocation() {
+            if (navigator.geolocation) {
+                // Set a timeout to hide loading if it takes too long
+                loadingTimeout = setTimeout(() => {
+                    showLoading(false);
+                    alert('Location request timed out. Using default view without user location.');
+                }, 10000); // 10 seconds
+
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        clearTimeout(loadingTimeout);
+                        const userPos = [position.coords.latitude, position.coords.longitude];
+
+                        // Add the blue dot (circle marker) without changing zoom or center
+                        if (userMarker) {
+                            map.removeLayer(userMarker);
+                        }
+                        userMarker = L.circleMarker(userPos, {
+                            title: 'Your Location',
+                            alt: 'User location marker', // Accessibility
+                            radius: 8, // Size of the dot
+                            fillColor: '#3388ff', // Google Maps blue
+                            color: '#3388ff',
+                            fillOpacity: 1,
+                            weight: 2 // Border thickness
+                        }).addTo(map)
+                          .bindPopup('<b>Your Current Position</b><br>Lat: ' + userPos[0].toFixed(4) + '<br>Lng: ' + userPos[1].toFixed(4)); // Popup on click
+
+                        showLoading(false);
+                    },
+                    (error) => {
+                        clearTimeout(loadingTimeout);
+                        console.error('Error getting location:', error);
+                        alert('Unable to get your location. Please enable location services or check permissions.');
+                        showLoading(false);
+                    },
+                    { enableHighAccuracy: true }
+                );
+            } else {
+                alert('Geolocation is not supported by this browser.');
+                showLoading(false);
+            }
+        }
+
+        // Show/hide loading spinner
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'flex' : 'none';
+        }
+
+        // Load the map on page ready
+        window.onload = initMap;
+    </script>
+</body>
+</html>
